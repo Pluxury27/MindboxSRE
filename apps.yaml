@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-application
+  labels:
+    app: web-app
+spec:
+  replicas: 4  # Стартовое количество реплик для пиковой нагрузки.
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      containers:
+      - name: web-container
+        image: your-docker-image:latest  # Замените на актуальный образ
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"  # Для стабильной работы.
+          limits:
+            memory: "128Mi"
+            cpu: "500m"  # Для обработки пиков на старте.
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 80
+          initialDelaySeconds: 15  # Время для инициализации приложения.
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - web-app
+              topologyKey: "kubernetes.io/hostname"  # Обеспечивает распределение подов по разным нодам.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: "topology.kubernetes.io/zone"
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: web-app
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1  # Минимизирует даунтайм при обновлениях.
+    type: RollingUpdate
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web-app-pdb
+spec:
+  minAvailable: 3  # Обеспечивает отказоустойчивость при возможных рестартах и обновлениях.
+  selector:
+    matchLabels:
+      app: web-app
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web-app-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web-application
+  minReplicas: 1  # Минимальное количество подов ночью.
+  maxReplicas: 6  # Максимальное количество подов для обработки пиковой нагрузки.
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50  # Ориентируемся на использование CPU.
